@@ -1,63 +1,99 @@
-#pragma once // Ensures this header file is only included once per compilation unit
+#pragma once
 
-#include <cassert> // For runtime assertions (debug checks)
-#include <cstdlib> // For malloc() and free()
-#include <cmath>   // For sqrtf()
+#include <cassert>
+#include <cstdlib>
+#include <cmath>
 
-// Inline helper function to compute the square of a number
+// AVX detection
+#ifdef __AVX__
+#include <immintrin.h>
+#endif
+
+/* Note that for both task1 and task2 I did not see any significant increase 
+	in elapsed time (about ~1.2 times faster with AVX, I suspect this is
+	because compilation tries to automatically optimize the code?
+*/
+
 static inline double sq(double x)
 {
 	return x * x;
 }
 
-// A simple dynamically allocated vector of doubles
-// Provides basic functionality and a cosine similarity operation
 struct vector
 {
-	// Constructor: allocates memory for n elements
-	// Requires n to be positive and a multiple of 8 (likely for alignment/SIMD use)
 	vector(const int n) : n(n)
 	{
-		assert(n > 0);								 // Validate size
-		data = (double *)malloc(sizeof(double) * n); // Allocate raw memory
-		assert(data);								 // Ensure allocation succeeded
+		assert(n > 0);
+		data = (double *)malloc(sizeof(double) * n);
+		assert(data);
 	}
 
-	// Destructor: frees allocated memory
-	// Invoked automatically when a vector object goes out of scope or is deleted
 	~vector()
 	{
 		free(data);
 	}
 
-	// Sets the value of the i-th element in the vector
 	void set(double x, int i)
 	{
-		assert(i >= 0 && i < n); // Bounds check
+		assert(i >= 0 && i < n);
 		data[i] = x;
 	}
 
-	// Computes the cosine similarity between two vectors:
 	static double cosine_similarity(const vector &a, const vector &b)
 	{
-		assert(a.n == b.n); // Vectors must be of the same dimension
+		assert(a.n == b.n);
 		const int n = a.n;
-		double ab = 0.0; // Dot product accumulator
-		double aa = 0.0; // Magnitude accumulator for vector a
-		double bb = 0.0; // Magnitude accumulator for vector b
+		double ab = 0.0;
+		double aa = 0.0;
+		double bb = 0.0;
 
-		for (int i = 0; i < n; ++i)
-		{
+		#ifdef __AVX__
+		// Vectorized part: process 4 elements at a time using AVX
+		const int simd_width = 4;
+		int i = 0;
+		
+		__m256d sum_ab_vec = _mm256_setzero_pd();
+		__m256d sum_aa_vec = _mm256_setzero_pd();
+		__m256d sum_bb_vec = _mm256_setzero_pd();
+		
+		for (; i <= n - simd_width; i += simd_width) {
+			__m256d a_vec = _mm256_loadu_pd(a.data + i);
+			__m256d b_vec = _mm256_loadu_pd(b.data + i);
+			
+			sum_ab_vec = _mm256_add_pd(sum_ab_vec, _mm256_mul_pd(a_vec, b_vec));
+			sum_aa_vec = _mm256_add_pd(sum_aa_vec, _mm256_mul_pd(a_vec, a_vec));
+			sum_bb_vec = _mm256_add_pd(sum_bb_vec, _mm256_mul_pd(b_vec, b_vec));
+		}
+		
+		// Sum the vector results
+		double temp[4];
+		_mm256_storeu_pd(temp, sum_ab_vec);
+		ab = temp[0] + temp[1] + temp[2] + temp[3];
+		_mm256_storeu_pd(temp, sum_aa_vec);
+		aa = temp[0] + temp[1] + temp[2] + temp[3];
+		_mm256_storeu_pd(temp, sum_bb_vec);
+		bb = temp[0] + temp[1] + temp[2] + temp[3];
+		
+		// Process remaining elements with scalar
+		for (; i < n; ++i) {
 			aa += sq(a.data[i]);
 			bb += sq(b.data[i]);
 			ab += a.data[i] * b.data[i];
 		}
+		#else
 
-		// Normalize by magnitudes; potential division by zero if aa or bb == 0
-		return ab / (sqrtf(aa) * sqrtf(bb));
+		// Original scalar version
+		for (int i = 0; i < n; ++i) {
+			aa += sq(a.data[i]);
+			bb += sq(b.data[i]);
+			ab += a.data[i] * b.data[i];
+		}
+		#endif
+
+		return ab / (sqrt(aa) * sqrt(bb));
 	}
 
 private:
-	const int n = 0;		// Dimension (size) of the vector
-	double *data = nullptr; // Pointer to dynamically allocated array
+	const int n = 0;
+	double *data = nullptr;
 };
